@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Liga Football</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top">
+  <div class="wrap bar">
+    <h1>Liga Football</h1>
+    <div id="user" hidden><span id="who"></span><button id="logout" type="button" class="ghost">Sair</button></div>
+  </div>
+</header>
+
+<main class="wrap">
+  <div id="msg" role="status" aria-live="polite" hidden></div>
+
+  <section id="loading"><p id="loadingText">Carregando…</p></section>
+
+  <section id="auth" class="card narrow" hidden>
+    <form id="authForm">
+      <div class="tabs">
+        <button type="button" id="tabIn" class="tab on">Entrar</button>
+        <button type="button" id="tabUp" class="tab">Criar conta</button>
+      </div>
+      <label>E-mail
+        <input id="email" type="email" autocomplete="email" required>
+      </label>
+      <label>Senha <small>(mínimo 6 caracteres)</small>
+        <input id="pass" type="password" autocomplete="current-password" minlength="6" required>
+      </label>
+      <button id="authBtn" class="primary" type="submit">Entrar</button>
+    </form>
+  </section>
+
+  <section id="create" class="card narrow" hidden>
+    <h2>Funde o seu time</h2>
+    <p class="muted">Escolha o nome e a cor. Seu elenco inicial será sorteado automaticamente.</p>
+    <form id="createForm">
+      <label>Nome do time
+        <input id="teamName" maxlength="30" minlength="3" required placeholder="Ex.: Tubarões de Santos">
+      </label>
+      <label>Seu nome (treinador)
+        <input id="coachName" maxlength="30" minlength="2" required placeholder="Ex.: Carlos">
+      </label>
+      <label>Cor do time
+        <input id="teamColor" type="color" value="#1f6f43">
+      </label>
+      <button id="createBtn" class="primary" type="submit">Criar time</button>
+    </form>
+  </section>
+
+  <section id="team" hidden></section>
+</main>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.116.0/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
