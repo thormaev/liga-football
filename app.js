@@ -148,7 +148,8 @@ async function carregarTime() {
     usuarioAtual = null;
     return;
   }
-  desenharTime(time, jogadores || []);
+  const liga = await carregarLiga();
+  desenharTime(time, jogadores || [], liga);
   view('team');
 }
 
@@ -174,28 +175,105 @@ const classe = v => (v >= 15 ? 'hi' : v >= 12 ? 'md' : v <= 7 ? 'lo' : '');
 const num = v => el('span', { class: 'n ' + classe(v) }, v);
 const media = lista => (lista.length ? lista.reduce((s, x) => s + x, 0) / lista.length : 0);
 
-function desenharTime(time, jogadores) {
+// Dados da liga (se a Fase 3 ainda não foi instalada no banco, devolve null e o site mostra só o time)
+async function carregarLiga() {
+  const [s, t, m, st] = await Promise.all([
+    db.from('seasons').select('*').eq('status', 'active').maybeSingle(),
+    db.from('teams').select('id,name,color,conference,is_bot').not('conference', 'is', null),
+    db.from('matches').select('*').order('matchday').order('scheduled_at'),
+    db.from('standings').select('*')
+  ]);
+  if (s.error || t.error || m.error || st.error || !s.data) return null;
+  const porId = {};
+  for (const x of t.data) porId[x.id] = x;
+  return { season: s.data, teams: t.data, porId, matches: m.data, standings: st.data };
+}
+
+const corOk = c => (/^#[0-9a-fA-F]{6}$/.test(c || '') ? c : '#888888');
+
+function fmtData(iso) {
+  const p = {};
+  for (const x of new Intl.DateTimeFormat('pt-BR', {
+    timeZone: 'America/Sao_Paulo', weekday: 'short', day: '2-digit', month: '2-digit',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
+  }).formatToParts(new Date(iso))) p[x.type] = x.value;
+  return `${p.weekday.replace('.', '')} ${p.day}/${p.month} ${p.hour}:${p.minute}`;
+}
+
+function nomeTime(t, extra) {
+  if (!t) return el('span', {}, '?');
+  return el('span', { class: 'tm' },
+    el('i', { class: 'dot', style: 'background:' + corOk(t.color) }),
+    el('span', {}, t.name),
+    t.is_bot ? el('span', { class: 'cpu', title: 'Time controlado pelo computador' }, 'CPU') : null,
+    extra || null
+  );
+}
+
+function desenharTime(time, jogadores, liga) {
   const raiz = $('#team');
   raiz.replaceChildren();
 
-  // Cabeçalho
+  const meus = liga ? liga.matches.filter(m => m.home_id === time.id || m.away_id === time.id).sort((a, b) => a.matchday - b.matchday) : [];
+  const proximo = meus.find(m => m.status === 'scheduled');
   const folha = jogadores.reduce((s, p) => s + p.salario, 0);
-  raiz.append(
-    el('div', { class: 'card' },
-      el('div', { class: 'head' },
-        el('div', { class: 'swatch', style: 'background:' + time.color }),
-        el('div', {}, el('h2', {}, time.name), el('p', { class: 'muted' }, 'Treinador: ' + (time.coach_name || '—')))
-      ),
-      el('div', { class: 'stats' },
-        stat(jogadores.length, 'jogadores'),
-        stat(media(jogadores.map(p => p.overall)).toFixed(1), 'força média'),
-        stat(media(jogadores.map(p => p.age)).toFixed(1), 'idade média'),
-        stat('$ ' + (folha / 1000).toFixed(1) + ' mi', 'folha salarial / temporada')
+
+  // Cabeçalho (sempre visível)
+  const cab = el('div', { class: 'card' },
+    el('div', { class: 'head' },
+      el('div', { class: 'swatch', style: 'background:' + corOk(time.color) }),
+      el('div', {},
+        el('h2', {}, time.name),
+        el('p', { class: 'muted' },
+          'Treinador: ' + (time.coach_name || '—') +
+          (liga && time.conference ? ' · Conferência ' + time.conference + ' · Temporada ' + liga.season.number : ''))
       )
+    ),
+    el('div', { class: 'stats' },
+      stat(jogadores.length, 'jogadores'),
+      stat(media(jogadores.map(p => p.overall)).toFixed(1), 'força média'),
+      stat(media(jogadores.map(p => p.age)).toFixed(1), 'idade média'),
+      stat('$ ' + (folha / 1000).toFixed(1) + ' mi', 'folha salarial / temporada')
     )
   );
+  if (proximo) {
+    const casa = proximo.home_id === time.id;
+    cab.append(el('div', { class: 'next' },
+      el('span', { class: 'muted' }, 'Próximo jogo · Rodada ' + proximo.matchday),
+      el('b', {}, fmtData(proximo.scheduled_at) + ' (Brasília) · ' + (casa ? 'em casa' : 'fora') + ' contra'),
+      nomeTime(liga.porId[casa ? proximo.away_id : proximo.home_id])
+    ));
+  }
+  raiz.append(cab);
 
-  // Força por unidade (os melhores de cada posição)
+  // Abas
+  const panes = { time: paneTime(jogadores) };
+  const nomes = { time: 'Meu time' };
+  if (liga) {
+    panes.class = paneClassificacao(time, liga);
+    panes.cal = paneCalendario(time, liga, meus, proximo);
+    nomes.class = 'Classificação';
+    nomes.cal = 'Calendário';
+    const nav = el('div', { class: 'nav' });
+    const abrir = id => {
+      for (const k of Object.keys(panes)) panes[k].hidden = k !== id;
+      for (const b of nav.children) b.classList.toggle('on', b.dataset.id === id);
+    };
+    for (const k of Object.keys(panes)) {
+      const b = el('button', { type: 'button', 'data-id': k }, nomes[k]);
+      b.addEventListener('click', () => abrir(k));
+      nav.append(b);
+    }
+    raiz.append(nav);
+    for (const k of Object.keys(panes)) raiz.append(panes[k]);
+    abrir('time');
+  } else {
+    raiz.append(panes.time);
+  }
+}
+
+function paneTime(jogadores) {
+  const pane = el('div', { class: 'pane' });
   const top = (pos, n) => jogadores.filter(p => p.pos === pos).sort((a, b) => b.overall - a.overall).slice(0, n).map(p => p.overall);
   const unidades = [
     ['Quarterback', media(top('QB', 1))],
@@ -207,18 +285,16 @@ function desenharTime(time, jogadores) {
     ['Secundária', media([...top('CB', 2), ...top('S', 2)])],
     ['Times especiais', media([...top('K', 1), ...top('P', 1)])]
   ];
-  raiz.append(
+  pane.append(
     el('h3', {}, 'Força por unidade'),
     el('div', { class: 'card units' },
       unidades.map(([nome, v]) => el('div', { class: 'unit' },
         el('span', {}, nome), el('b', {}, v.toFixed(1)),
         el('i', {}, el('u', { style: 'width:' + Math.min(100, v / 20 * 100) + '%' }))
       ))
-    )
+    ),
+    el('h3', {}, 'Elenco')
   );
-
-  // Elenco
-  raiz.append(el('h3', {}, 'Elenco'));
   const cab = el('tr', {}, ['Nº', 'Nome', 'Pos', 'Idade', 'Téc', 'Fís', 'Men', 'Geral', 'Pot', 'Salário'].map(t => el('th', {}, t)));
   const corpo = el('tbody');
   for (const [grupo, posicoes] of GROUPS) {
@@ -235,10 +311,88 @@ function desenharTime(time, jogadores) {
       }
     }
   }
-  raiz.append(
+  pane.append(
     el('div', { class: 'tw' }, el('table', {}, el('thead', {}, cab), corpo)),
     el('p', { class: 'muted' }, 'Téc = técnica · Fís = físico · Men = mental · Pot = potencial. Todos os atributos vão de 1 a 20.')
   );
+  return pane;
+}
+
+function paneClassificacao(time, liga) {
+  const pane = el('div', { class: 'pane' });
+  for (const conf of ['Norte', 'Sul']) {
+    const lista = liga.standings.filter(s => s.conference === conf)
+      .sort((a, b) => b.pct - a.pct || (b.pts_for - b.pts_against) - (a.pts_for - a.pts_against) || b.pts_for - a.pts_for || a.name.localeCompare(b.name));
+    const corpo = el('tbody');
+    lista.forEach((s, i) => {
+      const saldo = s.pts_for - s.pts_against;
+      corpo.append(el('tr', { class: (s.team_id === time.id ? 'me ' : '') + (i === 3 ? 'cut' : '') },
+        el('td', {}, i + 1),
+        el('td', {}, nomeTime(s)),
+        el('td', {}, s.played), el('td', {}, s.wins), el('td', {}, s.losses), el('td', {}, s.ties),
+        el('td', {}, s.pts_for), el('td', {}, s.pts_against), el('td', {}, (saldo > 0 ? '+' : '') + saldo),
+        el('td', {}, Number(s.pct).toFixed(3).replace(/^0/, ''))
+      ));
+    });
+    pane.append(
+      el('h3', {}, 'Conferência ' + conf),
+      el('div', { class: 'tw tbl2' }, el('table', {},
+        el('thead', {}, el('tr', {}, ['#', 'Time', 'J', 'V', 'D', 'E', 'PF', 'PS', 'Saldo', '%'].map(t => el('th', {}, t)))),
+        corpo))
+    );
+  }
+  pane.append(el('p', { class: 'muted' }, 'J = jogos · V = vitórias · D = derrotas · E = empates · PF = pontos feitos · PS = pontos sofridos. Critérios: aproveitamento, saldo de pontos, pontos feitos. A linha verde marca os 4 que avançam aos playoffs (em breve).'));
+  return pane;
+}
+
+function paneCalendario(time, liga, meus, proximo) {
+  const pane = el('div', { class: 'pane' });
+
+  // Meus jogos
+  const corpo = el('tbody');
+  for (const m of meus) {
+    const casa = m.home_id === time.id;
+    let res = '—', cls = '';
+    if (m.status === 'played') {
+      const a = casa ? m.home_score : m.away_score, b = casa ? m.away_score : m.home_score;
+      res = a + ' x ' + b;
+      cls = a > b ? 'hi' : a < b ? 'lo' : 'md';
+    }
+    corpo.append(el('tr', {},
+      el('td', {}, m.matchday), el('td', {}, fmtData(m.scheduled_at)), el('td', {}, casa ? 'Casa' : 'Fora'),
+      el('td', {}, nomeTime(liga.porId[casa ? m.away_id : m.home_id])),
+      el('td', {}, el('span', { class: 'n ' + cls }, res))
+    ));
+  }
+  pane.append(
+    el('h3', {}, 'Meus jogos'),
+    el('div', { class: 'tw cal' }, el('table', {},
+      el('thead', {}, el('tr', {}, ['Rodada', 'Data (Brasília)', 'Local', 'Adversário', 'Resultado'].map(t => el('th', {}, t)))),
+      corpo))
+  );
+
+  // Jogos de cada rodada
+  const sel = el('select', { id: 'rodada', 'aria-label': 'Rodada' });
+  const rodadas = [...new Set(liga.matches.map(m => m.matchday))].sort((a, b) => a - b);
+  for (const r of rodadas) sel.append(el('option', { value: r }, 'Rodada ' + r));
+  sel.value = String(proximo ? proximo.matchday : rodadas[rodadas.length - 1]);
+  const lista = el('div', { class: 'games' });
+  const mostrar = () => {
+    lista.replaceChildren();
+    for (const m of liga.matches.filter(x => x.matchday === Number(sel.value))) {
+      const meu = m.home_id === time.id || m.away_id === time.id;
+      const jogado = m.status === 'played';
+      lista.append(el('div', { class: 'game' + (meu ? ' mine' : '') },
+        nomeTime(liga.porId[m.home_id]),
+        el('span', { class: 'sc' }, jogado ? m.home_score + ' x ' + m.away_score : 'x', el('small', { class: 'muted' }, fmtData(m.scheduled_at))),
+        nomeTime(liga.porId[m.away_id])
+      ));
+    }
+  };
+  sel.addEventListener('change', mostrar);
+  mostrar();
+  pane.append(el('h3', {}, 'Jogos da liga'), el('div', { class: 'row' }, sel), lista);
+  return pane;
 }
 
 function stat(valor, rotulo) {
