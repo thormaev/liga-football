@@ -148,7 +148,11 @@ async function carregarTime() {
     usuarioAtual = null;
     return;
   }
-  const liga = await carregarLiga();
+  let liga = await carregarLiga();
+  if (liga && liga.erro) {
+    msg('Não foi possível carregar a liga: ' + liga.erro, 'err');
+    liga = null;
+  }
   desenharTime(time, jogadores || [], liga);
   view('team');
 }
@@ -183,7 +187,9 @@ async function carregarLiga() {
     db.from('matches').select('*').order('matchday').order('scheduled_at'),
     db.from('standings').select('*')
   ]);
-  if (s.error || t.error || m.error || st.error || !s.data) return null;
+  const falha = [s, t, m, st].find(x => x.error);
+  if (falha) return { erro: falha.error.message };
+  if (!s.data) return { erro: 'nenhuma temporada ativa encontrada no banco.' };
   const porId = {};
   for (const x of t.data) porId[x.id] = x;
   return { season: s.data, teams: t.data, porId, matches: m.data, standings: st.data };
@@ -405,5 +411,8 @@ db.auth.onAuthStateChange((evento, session) => {
   if (evento === 'TOKEN_REFRESHED' || evento === 'USER_UPDATED') return;
   setTimeout(() => route(session), 0);
 });
+
+const ver = $('#ver');
+if (ver) ver.textContent = 'Versão do site: 3.1 (liga e calendário)';
 
 })();
